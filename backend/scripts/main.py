@@ -1,38 +1,30 @@
 import os
+import glob
 from scripts.scraper import scrape_website
-from scripts.parser import parse_html, parse_pdf
-from scripts.ocr import ocr_image
-from scripts.chunker import chunk_text
-from scripts.tagger import tag_chunks
+from scripts.parser import parse_all
+from scripts.chunker import chunk_text, chunk_all
 from scripts.indexer import create_index
 
-def main():
-    # Step 1: Scrape
-    scrape_website("https://brandcentral.verizon.wireless.com", "../data/scraped_pages")
-    
-    # Step 2: Parse
-    parsed_texts = []
-    for file in os.listdir("../data/scraped_pages"):
-        if file.endswith(".html"):
-            parsed_texts.append(parse_html(f"../data/scraped_pages/{file}"))
-        elif file.endswith(".pdf"):
-            parsed_texts.append(parse_pdf(f"../data/scraped_pages/{file}"))
-    
-    # Step 3: OCR
-    for file in os.listdir("../data/ocr_images"):
-        if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-            parsed_texts.append(ocr_image(f"../data/ocr_images/{file}"))
-    
-    # Step 4: Chunk
-    all_chunks = [chunk_text(text) for text in parsed_texts]
-    flattened_chunks = [chunk for sublist in all_chunks for chunk in sublist]
+BASE_URL = "https://brandcentral.verizon.wireless.com"
+SCRAPED_DIR = "./scraped_pages"
+PARSED_DIR = "./parsed_pages"
+CHUNKED_DIR = "./chunked_pages"
+INDEX_PATH = "./faiss_index/index.faiss"
 
-    # Step 5: Tag
-    tagged_chunks = tag_chunks(flattened_chunks)
+def process_website(scraped_dir, parsed_dir, chunked_dir, index_path):
+    parse_all(scraped_dir, parsed_dir)
+    chunk_all(parsed_dir, chunked_dir)
+    
+    # Combine all chunks into a single list
+    all_chunks = []
+    for file in glob.glob(f"{chunked_dir}/*.txt"):
+        with open(file, "r", encoding="utf-8") as f:
+            all_chunks.extend(f.read().split("
 
-    # Step 6: Index
-    index = create_index(flattened_chunks)
-    print("Index created and tagged successfully.")
+"))
+    
+    create_index(all_chunks, index_path)
 
 if __name__ == "__main__":
-    main()
+    scrape_website(BASE_URL, SCRAPED_DIR)
+    process_website(SCRAPED_DIR, PARSED_DIR, CHUNKED_DIR, INDEX_PATH)
