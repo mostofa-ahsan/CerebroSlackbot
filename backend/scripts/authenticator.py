@@ -1,5 +1,6 @@
 import os
 import time
+import json
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -17,16 +18,9 @@ WORKER_ID = os.getenv("WORKER_ID")
 PIN = os.getenv("PIN")
 PASSWORD = os.getenv("PASSWORD")
 
-print(LAST_NAME)
-print(USER_ID)
-print(COMMUNITY_ID)
-print(WORKER_ID)
-print(PIN)
-print(PASSWORD)
-
-
 BASE_URL = "https://brandcentral.verizonwireless.com/signin"
 ENTERPRISE_LOGIN_URL = "https://ilogin.verizon.com/ngauth/verifyusercontroller?method=validateuser"
+COOKIE_FILE = "cookies.json"
 
 def login_to_verizon():
     # Set up Selenium WebDriver (Visible Browser)
@@ -37,11 +31,12 @@ def login_to_verizon():
     driver = webdriver.Chrome(service=Service(), options=chrome_options)
 
     try:
-        # Perform login steps
+        # Step 1: Navigate to login page
         print(f"Navigating to {BASE_URL}...")
         driver.get(BASE_URL)
         time.sleep(3)
 
+        # Step 2: Click "Verizon Employees" button
         print("Waiting for 'Verizon Employees' button...")
         WebDriverWait(driver, 20).until(
             EC.presence_of_element_located((By.XPATH, "//*[@id='bc-root']/main/div[2]/div[1]/button"))
@@ -51,6 +46,7 @@ def login_to_verizon():
         employee_button.click()
         time.sleep(3)
 
+        # Step 3: Enter Last Name and User ID
         print("Entering Last Name and User ID...")
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "lastname")))
         driver.find_element(By.ID, "lastname").send_keys(LAST_NAME)
@@ -58,12 +54,17 @@ def login_to_verizon():
         driver.find_element(By.ID, "intlcontinue").click()
         time.sleep(3)
 
+        # Step 4: Handle the popup and click "I Agree"
         print("Waiting for the 'I Agree' button in the popup...")
         WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.XPATH, "//*[@id='btnOk']")))
         i_agree_button = driver.find_element(By.XPATH, "//*[@id='btnOk']")
         print("Clicking 'I Agree'...")
         i_agree_button.click()
         time.sleep(3)
+
+        # Step 5: Enter Community ID, Worker ID, and PIN on the new page
+        print(f"Waiting for the new page at {ENTERPRISE_LOGIN_URL}...")
+        WebDriverWait(driver, 20).until(EC.url_contains(ENTERPRISE_LOGIN_URL))
 
         print("Entering Community ID, Worker ID, and PIN...")
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.XPATH, "//*[@id='userCommunityId']")))
@@ -73,27 +74,23 @@ def login_to_verizon():
         driver.find_element(By.XPATH, "//*[@id='continue']").click()
         time.sleep(3)
 
+        # Step 6: Enter Password
         print("Entering Password and logging in...")
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "phrase")))
         driver.find_element(By.ID, "phrase").send_keys(PASSWORD)
         driver.find_element(By.ID, "LoginBtn").click()
         time.sleep(5)
 
-        current_url = driver.current_url
-        if "home" in current_url or "dashboard" in current_url:
-            print("Login successful! Navigating to home page...")
-            print(f"Current page: {current_url}")
-        else:
-            print("Login failed. Current page:", current_url)
-            driver.quit()
+        # Extract cookies after login
+        cookies = driver.get_cookies()
+        if not cookies:
+            print("Error: No cookies were retrieved after login.")
             return None
-
-        return driver  # Return the authenticated driver instance
-
-    except Exception as e:
-        print("Error during login:", e)
+        print(f"Retrieved cookies: {cookies}")
+        return cookies
+    
+    finally:
         driver.quit()
-        return None
 
 if __name__ == "__main__":
     login_to_verizon()
