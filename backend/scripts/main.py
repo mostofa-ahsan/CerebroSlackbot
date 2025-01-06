@@ -1,30 +1,23 @@
 import os
 import glob
-from scripts.scraper import scrape_website
-from scripts.parser import parse_all
-from scripts.chunker import chunk_text, chunk_all
-from scripts.indexer import create_index
 
-BASE_URL = "https://brandcentral.verizon.wireless.com"
-SCRAPED_DIR = "./scraped_pages"
-PARSED_DIR = "./parsed_pages"
-CHUNKED_DIR = "./chunked_pages"
-INDEX_PATH = "./faiss_index/index.faiss"
+from scraper_playwright_w_pdf import main as scraper
+from convert_to_pdf import main as converter
+from parse_text_urls import main as parser
+from map_metadata import main as mapper
+from ingest_to_neo4j import ingest_data_to_neo4j
 
-def process_website(scraped_dir, parsed_dir, chunked_dir, index_path):
-    parse_all(scraped_dir, parsed_dir)
-    chunk_all(parsed_dir, chunked_dir)
-    
-    # Combine all chunks into a single list
-    all_chunks = []
-    for file in glob.glob(f"{chunked_dir}/*.txt"):
-        with open(file, "r", encoding="utf-8") as f:
-            all_chunks.extend(f.read().split("
+LIMIT = 50
+MOST_RECENT_VISITED = max(glob.glob("../data/visited_links_*.txt"), key=os.path.getctime)
 
-"))
-    
-    create_index(all_chunks, index_path)
+def main():
+    print("Starting the pipeline...")
+    scraper(limit=LIMIT, skip_links=MOST_RECENT_VISITED)
+    converter()
+    parser()
+    mapper()
+    ingest_data_to_neo4j("../data/mapped_metadata.json")
+    print("Pipeline completed!")
 
 if __name__ == "__main__":
-    scrape_website(BASE_URL, SCRAPED_DIR)
-    process_website(SCRAPED_DIR, PARSED_DIR, CHUNKED_DIR, INDEX_PATH)
+    main()

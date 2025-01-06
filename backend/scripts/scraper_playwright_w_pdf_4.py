@@ -101,7 +101,7 @@ def extract_links_and_assets(page, url):
     images = page.evaluate("""Array.from(document.querySelectorAll('img[src]')).map(img => img.src);""")
     downloads = [
         link for link in links
-        if link.lower().endswith(('.pdf', '.ppt', '.pptx', '.potx', '.docx'))
+        if link.lower().endswith(('.pdf', '.ppt', '.pptx', '.potx', '.docx', '.xls', '.zip', '.png', '.mp4', ".jpg", "jpeg"))
     ]
 
     # Convert relative URLs to absolute URLs
@@ -117,7 +117,7 @@ def handle_downloads(page):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     # Define file extensions to look for in aria-label
-    file_extensions = [".pdf", ".ppt", ".pptx", ".potx", ".docx"]
+    file_extensions = [".pdf", ".ppt", ".pptx", ".potx", ".zip", ".png", ".mp4", ".jpg", "jpeg"]
 
     # Find all buttons on the page
     buttons = page.query_selector_all("button, div, a")  # Adjust based on your inspection
