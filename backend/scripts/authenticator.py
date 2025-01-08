@@ -1,13 +1,7 @@
 import os
 import time
-import json
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
 
 # Load credentials from .env
 load_dotenv()
@@ -20,77 +14,69 @@ PASSWORD = os.getenv("PASSWORD")
 
 BASE_URL = "https://brandcentral.verizonwireless.com/signin"
 ENTERPRISE_LOGIN_URL = "https://ilogin.verizon.com/ngauth/verifyusercontroller?method=validateuser"
-COOKIE_FILE = "cookies.json"
 
-def login_to_verizon():
-    # Set up Selenium WebDriver (Visible Browser)
-    chrome_options = Options()
-    chrome_options.add_argument("--start-maximized")  # Open browser in maximized mode
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    driver = webdriver.Chrome(service=Service(), options=chrome_options)
+
+def login_to_verizon_with_playwright(playwright):
+    """Authenticate to Verizon using Playwright and return the authenticated page."""
+    browser = playwright.chromium.launch(headless=False)
+    context = browser.new_context()
+    page = context.new_page()
 
     try:
         # Step 1: Navigate to login page
         print(f"Navigating to {BASE_URL}...")
-        driver.get(BASE_URL)
+        page.goto(BASE_URL)
+        page.wait_for_load_state("networkidle")
         time.sleep(3)
 
         # Step 2: Click "Verizon Employees" button
-        print("Waiting for 'Verizon Employees' button...")
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.XPATH, "//*[@id='bc-root']/main/div[2]/div[1]/button"))
-        )
-        employee_button = driver.find_element(By.XPATH, "//*[@id='bc-root']/main/div[2]/div[1]/button")
         print("Clicking 'Verizon Employees' button...")
-        employee_button.click()
+        page.locator("//*[@id='bc-root']/main/div[2]/div[1]/button").click()
+        page.wait_for_load_state("networkidle")
         time.sleep(3)
 
         # Step 3: Enter Last Name and User ID
         print("Entering Last Name and User ID...")
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "lastname")))
-        driver.find_element(By.ID, "lastname").send_keys(LAST_NAME)
-        driver.find_element(By.ID, "user").send_keys(USER_ID)
-        driver.find_element(By.ID, "intlcontinue").click()
+        page.fill("#lastname", LAST_NAME)
+        page.fill("#user", USER_ID)
+        page.click("#intlcontinue")
         time.sleep(3)
 
         # Step 4: Handle the popup and click "I Agree"
-        print("Waiting for the 'I Agree' button in the popup...")
-        WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.XPATH, "//*[@id='btnOk']")))
-        i_agree_button = driver.find_element(By.XPATH, "//*[@id='btnOk']")
         print("Clicking 'I Agree'...")
-        i_agree_button.click()
+        page.locator("//*[@id='btnOk']").click()
         time.sleep(3)
 
         # Step 5: Enter Community ID, Worker ID, and PIN on the new page
-        print(f"Waiting for the new page at {ENTERPRISE_LOGIN_URL}...")
-        WebDriverWait(driver, 20).until(EC.url_contains(ENTERPRISE_LOGIN_URL))
-
-        print("Entering Community ID, Worker ID, and PIN...")
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.XPATH, "//*[@id='userCommunityId']")))
-        driver.find_element(By.XPATH, "//*[@id='userCommunityId']").send_keys(COMMUNITY_ID)
-        driver.find_element(By.XPATH, "//*[@id='nativeWorkerNumber']").send_keys(WORKER_ID)
-        driver.find_element(By.XPATH, "//*[@id='pin']").send_keys(PIN)
-        driver.find_element(By.XPATH, "//*[@id='continue']").click()
+        print("Waiting for the new page and entering credentials...")
+        page.wait_for_url(ENTERPRISE_LOGIN_URL)
+        page.fill("//*[@id='userCommunityId']", COMMUNITY_ID)
+        page.fill("//*[@id='nativeWorkerNumber']", WORKER_ID)
+        page.fill("//*[@id='pin']", PIN)
+        page.click("//*[@id='continue']")
         time.sleep(3)
 
         # Step 6: Enter Password
-        print("Entering Password and logging in...")
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "phrase")))
-        driver.find_element(By.ID, "phrase").send_keys(PASSWORD)
-        driver.find_element(By.ID, "LoginBtn").click()
+        print("Entering Password...")
+        page.fill("#phrase", PASSWORD)
+        page.click("#LoginBtn")
         time.sleep(5)
 
-        # Extract cookies after login
-        cookies = driver.get_cookies()
-        if not cookies:
-            print("Error: No cookies were retrieved after login.")
+        # Check for successful login
+        if "brandcentral" not in page.url:
+            print("Login failed. Check your credentials.")
+            context.close()
             return None
-        print(f"Retrieved cookies: {cookies}")
-        return cookies
-    
-    finally:
-        driver.quit()
+
+        print(f"Successfully logged in. Current URL: {page.url}")
+        return context, page
+
+    except Exception as e:
+        print(f"Error during login: {e}")
+        context.close()
+        return None
+
 
 if __name__ == "__main__":
-    login_to_verizon()
+    with sync_playwright() as playwright:
+        login_to_verizon_with_playwright(playwright)
