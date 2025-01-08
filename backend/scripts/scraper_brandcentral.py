@@ -175,6 +175,10 @@ def scrape_site(page, start_url, base_url, progress_data, limit, last_page_id):
             visited.add(current_url)
             to_visit.extend(link for link in child_links if link not in visited)
             count += 1
+
+            # Save intermediate progress after each page
+            save_progress_file(progress_data, PROGRESS_FILE)
+
             print(f"Scraped {count}/{limit} pages so far.")
 
         except Exception as e:

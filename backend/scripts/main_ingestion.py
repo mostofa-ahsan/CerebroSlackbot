@@ -1,5 +1,5 @@
 import os
-from scraper_brandcentral import scrape_site
+from scraper_brandcentral import scrape_site, load_progress_file, save_progress_file
 from authenticator import login_to_verizon_with_playwright
 from pdf_parser import parse_pdfs
 from chunking import chunk_parsed_data
@@ -33,9 +33,12 @@ def main():
     print("Starting the pipeline...")
 
     BASE_URL = "https://brandcentral.verizonwireless.com"
-    progress_data = []
 
-    # Step 1: Authenticate using Playwright and start scraping
+    # Step 1: Load progress summary
+    progress_data = load_progress_file(PROGRESS_FILE)
+    last_page_id = progress_data[-1]["page_id"] if progress_data else 0
+
+    # Step 2: Authenticate using Playwright and start scraping
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
         context, page = login_to_verizon_with_playwright(playwright)
@@ -43,47 +46,57 @@ def main():
             print("Authentication failed. Exiting pipeline.")
             return
 
-        # Step 2: Start scraping
-        last_page_id = len(progress_data)
-        print(f"Scraping with limit: {LIMIT}")
-        progress_data = scrape_site(
-            page=page,
-            start_url=BASE_URL,
-            base_url=BASE_URL,
-            progress_data=progress_data,
-            limit=LIMIT,
-            last_page_id=last_page_id,
-        )
+        try:
+            # Step 3: Start scraping
+            print(f"Scraping with limit: {LIMIT}")
+            progress_data = scrape_site(
+                page=page,
+                start_url=BASE_URL,
+                base_url=BASE_URL,
+                progress_data=progress_data,
+                limit=LIMIT,
+                last_page_id=last_page_id,
+            )
+        finally:
+            # Ensure context is closed
+            context.close()
 
-        # Close the context after scraping
-        context.close()
+    # Step 4: Save updated progress summary
+    save_progress_file(progress_data, PROGRESS_FILE)
 
-    # Step 3: Parse PDFs
+    # Step 5: Parse PDFs
     print("Parsing PDF files...")
     parse_pdfs([PAGES_AS_PDF_DIR], PARSED_DIR)
 
-    # Step 4: Chunk parsed data
+    # Step 6: Chunk parsed data
     print("Chunking parsed data...")
     chunk_parsed_data(PARSED_DIR, CHUNKED_DIR)
 
-    # Step 5: Embed chunks
+    # Step 7: Embed chunks
     print("Embedding chunked data...")
     embed_chunks(CHUNKED_DIR, EMBEDDING_DIR)
 
-    # Step 6: Create indexes
+    # Step 8: Create indexes
     print("Creating indexes...")
     create_index(EMBEDDING_DIR, INDEX_DIR)
 
-    # Step 7: Map metadata
+    # Step 9: Map metadata
     print("Mapping metadata...")
     try:
-        map_metadata()
+        mapped_metadata_path = os.path.join(DATA_DIR, "mapped_metadata.json")
+        map_metadata(
+            progress_file=PROGRESS_FILE,
+            mapped_metadata_file=mapped_metadata_path,
+            index_dir=INDEX_DIR,
+            embedding_dir=EMBEDDING_DIR,
+        )
     except Exception as e:
         print(f"Error during metadata mapping: {e}")
 
-    # Step 8: Ingest data into Neo4j
+
+    # Step 10: Ingest data into Neo4j
     print("Ingesting data to Neo4j...")
-    mapped_metadata_path = os.path.join(DATA_DIR, "mapped_metadata.json")
+    mapped_metadata_path = os.path.normpath(os.path.join(DATA_DIR, "mapped_metadata.json"))
     if os.path.exists(mapped_metadata_path):
         try:
             ingest_data_to_neo4j(mapped_metadata_path, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
@@ -91,6 +104,7 @@ def main():
             print(f"Error during Neo4j ingestion: {e}")
     else:
         print(f"Error: {mapped_metadata_path} not found. Ensure map_metadata.py ran successfully.")
+
 
     print("##############################################")
     print("Pipeline execution completed.")
