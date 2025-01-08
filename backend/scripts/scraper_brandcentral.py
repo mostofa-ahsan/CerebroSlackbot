@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import datetime
 import requests
@@ -84,22 +85,52 @@ def save_page_content(page, url):
     return html_filename, pdf_filename
 
 
-def download_file(file_url, save_dir):
-    """Download a file and save it locally."""
-    try:
-        os.makedirs(save_dir, exist_ok=True)
-        local_filename = os.path.join(save_dir, os.path.basename(urlparse(file_url).path))
-        response = requests.get(file_url, stream=True, timeout=10)
-        response.raise_for_status()
+def download_file(file_url, save_dir, headers=None, retries=3, backoff_factor=2):
+    """
+    Download a file with retry and backoff mechanism.
 
-        with open(local_filename, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print(f"Downloaded file: {local_filename}")
-        return local_filename
-    except Exception as e:
-        print(f"Error downloading {file_url}: {e}")
-        return None
+    Args:
+        file_url (str): The URL of the file to download.
+        save_dir (str): The directory to save the downloaded file.
+        headers (dict): Optional HTTP headers to include in the request.
+        retries (int): Number of retry attempts.
+        backoff_factor (int): Factor by which the delay increases with each retry.
+
+    Returns:
+        str: Path to the downloaded file or None if download failed.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    local_filename = os.path.join(save_dir, os.path.basename(urlparse(file_url).path))
+    attempt = 0
+
+    while attempt < retries:
+        try:
+            print(f"Downloading file: {file_url} (Attempt {attempt + 1})")
+            response = requests.get(
+                file_url,
+                stream=True,
+                timeout=10,  # Set a timeout to avoid hanging indefinitely
+                headers=headers or {"User-Agent": "Mozilla/5.0 (compatible;)"}
+            )
+            response.raise_for_status()  # Raise an error for HTTP codes 4xx or 5xx
+
+            with open(local_filename, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            print(f"Downloaded file: {local_filename}")
+            return local_filename  # Return the file path upon success
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error downloading {file_url}: {e}")
+            attempt += 1
+            delay = backoff_factor ** attempt
+            print(f"Retrying in {delay} seconds...")
+            time.sleep(delay)
+
+    print(f"Failed to download file: {file_url} after {retries} attempts.")
+    return None  # Return None if all attempts fail
 
 
 def extract_links_and_assets(page, base_url):
