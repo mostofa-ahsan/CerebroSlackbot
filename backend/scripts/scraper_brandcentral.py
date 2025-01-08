@@ -1,7 +1,8 @@
 import os
 import json
 import datetime
-from urllib.parse import urljoin
+import requests
+from urllib.parse import urljoin, urlparse
 from playwright.sync_api import sync_playwright
 
 DATA_DIR = "../data"
@@ -33,6 +34,40 @@ def save_progress_file(data, file_path):
     print(f"Progress saved to {file_path}")
 
 
+def transfer_cookies_to_playwright(selenium_cookies):
+    """Convert Selenium cookies to Playwright cookies."""
+    return [
+        {
+            "name": cookie["name"],
+            "value": cookie["value"],
+            "domain": cookie["domain"],
+            "path": cookie["path"],
+            "expires": cookie.get("expiry"),
+            "httpOnly": cookie.get("httpOnly", False),
+            "secure": cookie.get("secure", False),
+            "sameSite": cookie.get("sameSite", "Lax"),
+        }
+        for cookie in selenium_cookies
+    ]
+
+
+def create_playwright_context(selenium_cookies):
+    """Create a Playwright browser context and apply cookies."""
+    playwright = sync_playwright().start()
+    browser = playwright.chromium.launch(headless=False)
+    context = browser.new_context()
+
+    # Convert Selenium cookies to Playwright format
+    playwright_cookies = transfer_cookies_to_playwright(selenium_cookies)
+
+    # Apply cookies to the context
+    context.add_cookies(playwright_cookies)
+
+    # Create a new page
+    page = context.new_page()
+    return context, page
+
+
 def save_page_content(page, url):
     """Save page content as HTML and PDF."""
     html_filename = os.path.join(OUTPUT_DIR, f"{url.replace('/', '_').replace(':', '')}.html")
@@ -48,41 +83,53 @@ def save_page_content(page, url):
     print(f"Saved PDF: {pdf_filename}")
     return html_filename, pdf_filename
 
-def create_playwright_context(selenium_cookies):
-    """
-    Create a Playwright browser context and apply cookies.
 
-    Args:
-        selenium_cookies (list): A list of cookies from Selenium to apply in Playwright.
+def download_file(file_url, save_dir):
+    """Download a file and save it locally."""
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        local_filename = os.path.join(save_dir, os.path.basename(urlparse(file_url).path))
+        response = requests.get(file_url, stream=True, timeout=10)
+        response.raise_for_status()
 
-    Returns:
-        tuple: (Playwright context, Playwright page)
-    """
-    playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=False)
-    context = browser.new_context()
+        with open(local_filename, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"Downloaded file: {local_filename}")
+        return local_filename
+    except Exception as e:
+        print(f"Error downloading {file_url}: {e}")
+        return None
 
-    # Convert Selenium cookies to Playwright format
-    playwright_cookies = [
-        {
-            "name": cookie["name"],
-            "value": cookie["value"],
-            "domain": cookie["domain"],
-            "path": cookie["path"],
-            "expires": cookie.get("expiry"),
-            "httpOnly": cookie.get("httpOnly", False),
-            "secure": cookie.get("secure", False),
-            "sameSite": cookie.get("sameSite", "Lax"),
-        }
-        for cookie in selenium_cookies
+
+def extract_links_and_assets(page, base_url):
+    """Extract all links, images, and downloadable files from the page."""
+    links = page.evaluate("""Array.from(document.querySelectorAll('a[href]')).map(a => a.href);""")
+    images = page.evaluate("""Array.from(document.querySelectorAll('img[src]')).map(img => img.src);""")
+    downloads = [
+        link for link in links
+        if link.lower().endswith(('.pdf', '.ppt', '.pptx', '.potx', '.docx'))
     ]
 
-    # Apply cookies to the context
-    context.add_cookies(playwright_cookies)
+    # Convert relative URLs to absolute URLs
+    links = [urljoin(base_url, link) for link in links]
+    images = [urljoin(base_url, img) for img in images]
+    downloads = [urljoin(base_url, dl) for dl in downloads]
 
-    # Create a new page
-    page = context.new_page()
-    return context, page
+    return links, images, downloads
+
+
+def handle_downloads(page, base_url):
+    """Handle file downloads and images."""
+    links, images, downloads = extract_links_and_assets(page, base_url)
+
+    # Download images
+    saved_images = [download_file(img, IMAGE_DIR) for img in images]
+
+    # Download files
+    downloaded_files = [download_file(dl, DOWNLOAD_DIR) for dl in downloads]
+
+    return links, saved_images, downloaded_files
 
 
 def scrape_site(page, start_url, base_url, progress_data, limit, last_page_id):
@@ -114,20 +161,17 @@ def scrape_site(page, start_url, base_url, progress_data, limit, last_page_id):
             page.wait_for_load_state("networkidle")
 
             saved_as_html, saved_as_pdf = save_page_content(page, current_url)
-
-            child_links = page.evaluate("Array.from(document.querySelectorAll('a[href]')).map(a => a.href);")
-            child_links = [urljoin(base_url, link) for link in child_links if link.startswith(base_url)]
+            child_links, saved_images, downloaded_files = handle_downloads(page, base_url)
 
             progress_data.append({
                 "page_id": last_page_id + count + 1,
-                "timestamp": datetime.datetime.now().isoformat(),
                 "page_link": current_url,
                 "saved_as_pdf": saved_as_pdf,
                 "saved_as_html": saved_as_html,
                 "child_pages": child_links,
                 "parent_pages": [start_url],
-                "download_list": [],
-                "saved_images_list": [],
+                "download_list": downloaded_files,
+                "saved_images_list": saved_images,
             })
 
             visited.add(current_url)
