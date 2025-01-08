@@ -12,20 +12,19 @@ DOWNLOAD_DIR = "../data/downloads"
 IMAGE_DIR = "../data/saved_images"
 SIGNOUT_KEYWORDS = ["signout", "logout", "print"]
 
-# Global variables for visited links and scrap summary
-visited_links = []
-scrap_summary = []
-
-# File paths with timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-VISITED_LINKS_FILE = f"../data/visited_links_{timestamp}.json"
+VISITED_LINKS_FILE = f"../data/visited_links_{timestamp}.txt"
 SCRAP_SUMMARY_FILE = f"../data/scrap_summary_{timestamp}.json"
+
+visited_links = set()
+scrap_summary = []
 
 
 def save_visited_links():
     """Save visited links and scrap summary to files."""
     with open(VISITED_LINKS_FILE, "w") as f:
-        json.dump(visited_links, f, indent=4)
+        for link in visited_links:
+            f.write(link + "\n")
     print(f"Visited links saved to {VISITED_LINKS_FILE}")
 
     with open(SCRAP_SUMMARY_FILE, "w") as f:
@@ -33,7 +32,6 @@ def save_visited_links():
     print(f"Scrap summary saved to {SCRAP_SUMMARY_FILE}")
 
 
-# Register the save_visited_links function to run on exit
 atexit.register(save_visited_links)
 
 
@@ -48,34 +46,11 @@ def transfer_cookies_to_playwright(selenium_cookies):
             "expires": cookie.get("expiry"),
             "httpOnly": cookie.get("httpOnly", False),
             "secure": cookie.get("secure", False),
-            "sameSite": cookie.get("sameSite", "Lax"),
+            "sameSite": cookie.get("sameSite", "None")
         }
         for cookie in selenium_cookies
     ]
 
-def create_playwright_context(selenium_cookies):
-    """
-    Create a Playwright browser context and apply cookies.
-
-    Args:
-        selenium_cookies (list): A list of cookies from Selenium to apply in Playwright.
-
-    Returns:
-        tuple: (Playwright context, Playwright page)
-    """
-    playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=False)
-    context = browser.new_context()
-
-    # Convert Selenium cookies to Playwright format
-    playwright_cookies = transfer_cookies_to_playwright(selenium_cookies)
-
-    # Apply cookies to the context
-    context.add_cookies(playwright_cookies)
-
-    # Create a new page
-    page = context.new_page()
-    return context, page
 
 def download_file(file_url, save_dir):
     """Download a file and save it."""
@@ -115,7 +90,6 @@ def save_page_content_and_pdf(page, url):
         margin={"top": "0.5in", "right": "0.5in", "bottom": "0.5in", "left": "0.5in"}
     )
     print(f"Page content saved as PDF: {pdf_filename}")
-    return pdf_filename
 
 
 def extract_links_and_assets(page, url):
@@ -133,7 +107,6 @@ def extract_links_and_assets(page, url):
     downloads = [urljoin(url, dl) for dl in downloads]
 
     return links, images, downloads
-
 
 
 def handle_downloads(page):
@@ -174,8 +147,7 @@ def handle_downloads(page):
             print(f"Error clicking button or downloading: {e}")
 
 
-def scrape_site(page, start_url, base_url, skip_links: set, limit=None):
-    """Recursively scrape all links on the website."""
+def scrape_site(page, start_url, skip_links, limit=None):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(PDF_OUTPUT_DIR, exist_ok=True)
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -185,11 +157,6 @@ def scrape_site(page, start_url, base_url, skip_links: set, limit=None):
     visited = set(skip_links)
     count = 0
 
-    print(f"Starting from URL: {start_url}")
-    print(f"Base URL: {base_url}")
-    print(f"Scraping limit: {limit}")
-    print(f"Skip links count: {len(skip_links)}")
-
     while to_visit:
         if limit and count >= limit:
             print(f"Visited limit of {limit} pages reached. Stopping.")
@@ -197,7 +164,6 @@ def scrape_site(page, start_url, base_url, skip_links: set, limit=None):
 
         current_url = to_visit.pop(0)
         if current_url in visited or any(keyword in current_url.lower() for keyword in SIGNOUT_KEYWORDS):
-            print(f"Skipping already visited URL: {current_url}")
             continue
 
         print(f"Scraping: {current_url}")
@@ -205,45 +171,34 @@ def scrape_site(page, start_url, base_url, skip_links: set, limit=None):
             page.goto(current_url)
             page.wait_for_load_state("networkidle")
 
-            # Save page content and PDF
-            pdf_path = save_page_content_and_pdf(page, current_url)
+            save_page_content_and_pdf(page, current_url)
+
             child_links, images, downloads = extract_links_and_assets(page, current_url)
 
-            print(f"Extracted {len(child_links)} child links from {current_url}.")
+            downloaded_files = [download_file(file_url, DOWNLOAD_DIR) for file_url in downloads if file_url]
+            saved_images = [download_file(img_url, IMAGE_DIR) for img_url in images if img_url]
 
-            # Download assets
-            [download_file(img, IMAGE_DIR) for img in images]
-            [download_file(dl, DOWNLOAD_DIR) for dl in downloads]
+            scrap_summary.append({
+                "visited_page_id": len(scrap_summary) + 1,
+                "visited_page_link": current_url,
+                "parent_page_link": None,
+                "child_web_links": child_links,
+                "image_list": saved_images,
+                "downloadable_file_list": downloaded_files
+            })
 
-            # Save scrap summary
-            scrap_summary.append(
-                {
-                    "visited_page_id": len(scrap_summary) + 1,
-                    "visited_page_link": current_url,
-                    "parent_page_link": start_url,
-                    "child_web_links": child_links,
-                    "saved_as": pdf_path,
-                }
-            )
-
-            # Add child links to the queue
             for link in child_links:
-                if link.startswith(base_url) and link not in visited:
+                if link.startswith(start_url) and link not in visited:
                     to_visit.append(link)
 
             visited.add(current_url)
-            visited_links.append({"page_id": len(visited_links) + 1, "page_link": current_url, "saved_as": pdf_path})
             count += 1
-
-            print(f"Scraped {count}/{limit} pages so far.")
 
         except Exception as e:
             print(f"Error scraping {current_url}: {e}")
 
     print("Scraping completed!")
-    print(f"Total pages scraped: {count}")
-    return visited, scrap_summary
-
+    return visited
 
 
 def main(skip_links=None, limit=None, start_url=None):

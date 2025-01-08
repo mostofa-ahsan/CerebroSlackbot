@@ -11,12 +11,19 @@ def extract_text_and_urls(pdf_path):
     """Extract text and URLs from a PDF."""
     try:
         reader = PdfReader(pdf_path)
-        text = "".join(page.extract_text() for page in reader.pages)
+        if not reader.pages:
+            print(f"Empty PDF: {pdf_path}")
+            return "", []
+
+        text = "".join(page.extract_text() for page in reader.pages if page.extract_text())
         urls = re.findall(r"https?://\S+", text)
         return text, urls
+    except FileNotFoundError:
+        print(f"File not found: {pdf_path}")
     except Exception as e:
         print(f"Failed to parse {pdf_path}: {e}")
         return "", []
+
 
 def save_parsed_data(file_name, text, urls):
     """Save extracted text and URLs."""

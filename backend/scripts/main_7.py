@@ -12,7 +12,7 @@ from embedding import embed_chunks
 from indexer import create_index
 
 # Configuration
-LIMIT = 2  # Limit on the number of pages to scrape in each run
+LIMIT = 5  # Limit on the number of pages to scrape in each run
 DATA_DIR = "../data"
 PAGES_AS_PDF_DIR = os.path.join(DATA_DIR, "pages_as_pdf")
 CONVERTED_DOWNLOADS_DIR = os.path.join(DATA_DIR, "converted_downloads")
@@ -36,19 +36,39 @@ def get_most_recent_file(pattern):
     return max(files, key=os.path.getctime) if files else None
 
 
-def load_json_file(file_path):
-    """Load data from a JSON file."""
+def load_visited_links(file_path):
+    """Load visited links from a JSON file into a list."""
     try:
         with open(file_path, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            return data, max([entry["page_id"] for entry in data]) if data else 0
     except FileNotFoundError:
-        return []
-    except Exception as e:
-        print(f"Error loading JSON file {file_path}: {e}")
-        return []
+        return [], 0
 
 
-def save_json_file(data, file_path):
+def save_visited_links(visited_links, file_path):
+    """Save visited links to a JSON file."""
+    with open(file_path, "w") as f:
+        json.dump(visited_links, f, indent=4)
+    print(f"Visited links saved to {file_path}")
+
+
+def combine_scrap_summaries(files, output_file):
+    """Combine multiple scrap_summary JSON files into one."""
+    combined = []
+    for file in files:
+        try:
+            with open(file, "r") as f:
+                combined.extend(json.load(f))
+        except Exception as e:
+            print(f"Error reading {file}: {e}")
+
+    with open(output_file, "w") as f:
+        json.dump(combined, f, indent=4)
+    print(f"Combined scrap summary saved to {output_file}")
+
+
+def save_data_to_file(data, file_path):
     """Save data to a JSON file."""
     try:
         with open(file_path, "w") as f:
@@ -58,65 +78,48 @@ def save_json_file(data, file_path):
         print(f"Error saving data to {file_path}: {e}")
 
 
-def merge_scrap_summaries(new_data, previous_data):
-    """Merge new and previous scrap summaries, avoiding duplicates and ensuring consistent page_id."""
-    max_page_id = max((entry.get("page_id", 0) for entry in previous_data if "page_id" in entry), default=0)
-    merged_data = {}
-
-    for entry in previous_data:
-        if "page_link" in entry and "page_id" in entry:
-            merged_data[entry["page_link"]] = entry
-        else:
-            print(f"Skipping invalid entry in previous_data: {entry}")
-
-    for idx, entry in enumerate(new_data, start=1):
-        page_link = entry.get("page_link")
-        if not page_link:
-            print(f"Warning: Missing 'page_link' in new data entry: {entry}")
-            continue
-        entry["page_id"] = max_page_id + idx
-        merged_data[page_link] = entry
-
-    return list(merged_data.values())
-
-
-
 def main():
     print("##############################################")
     print("Starting the pipeline...")
 
-    BASE_URL = "https://brandcentral.verizonwireless.com"
+    BASE_URL = "https://brandcentral.verizonwireless.com"  # Define the base URL
+    LIMIT = 10  # Limit on the number of pages to scrape in each run
 
-    # Step 1: Load the most recent visited links
+    # Step 1: Detect the most recent visited_links file
     visited_links_files = glob.glob(os.path.join(DATA_DIR, "visited_links_*.json"))
     previous_links_set = set()
     last_visited_link = BASE_URL
     previous_links = []
-    last_scrap_summary = []
     last_page_id = 0
 
     if visited_links_files:
         most_recent_visited_file = max(visited_links_files, key=os.path.getctime)
         print(f"Most recent visited links file: {most_recent_visited_file}")
-        previous_links, last_page_id = load_json_file(most_recent_visited_file), max(
-            [entry.get("page_id", 0) for entry in load_json_file(most_recent_visited_file)]
-        )
+        previous_links, last_page_id = load_visited_links(most_recent_visited_file)
         previous_links_set = {entry["page_link"] for entry in previous_links}
         last_visited_link = previous_links[-1]["page_link"] if previous_links else BASE_URL
+
+        # Exclude last_visited_link from the skip list
+        if last_visited_link:
+            previous_links_set.discard(last_visited_link)
+
         print(f"Last visited link: {last_visited_link}")
     else:
         print("No visited links file found. Starting fresh.")
 
-    if last_visited_link in previous_links_set:
-        previous_links_set.remove(last_visited_link)
-
-    # Step 2: Authenticate and create Playwright context
+    # Step 2: Authenticate and get Selenium cookies
+    from authenticator import login_to_verizon
     selenium_cookies = login_to_verizon()
+
+    # Step 3: Create Playwright context with cookies
+    from scraper_playwright_w_pdf import scrape_site, create_playwright_context
     context, page = create_playwright_context(selenium_cookies)
 
     try:
+        # Step 4: Run the scraper
         print(f"Scraping with limit: {LIMIT}")
-        visited_links_set, scrap_summary_data = scrape_site(
+        print(f"Starting recursive scraping from {last_visited_link}")
+        new_links, scrap_summary_data = scrape_site(
             page=page,
             start_url=last_visited_link,
             base_url=BASE_URL,
@@ -126,7 +129,7 @@ def main():
     finally:
         context.close()
 
-    # Step 3: Update visited links
+    # Step 5: Update visited links
     new_visited_links = [
         {
             "page_id": last_page_id + idx + 1,
@@ -137,53 +140,48 @@ def main():
                 f"{link.replace('/', '_').replace(':', '').replace('.', '_')}.pdf",
             ).replace("\\", "/"),
         }
-        for idx, link in enumerate(visited_links_set - previous_links_set)
+        for idx, link in enumerate(new_links)
     ]
 
     combined_visited_links = previous_links + new_visited_links
     visited_links_file_path = os.path.join(
         DATA_DIR, f"visited_links_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     )
-    save_json_file(combined_visited_links, visited_links_file_path)
+    save_visited_links(combined_visited_links, visited_links_file_path)
 
-    # Step 4: Update scrap summaries
-    previous_scrap_summary = load_json_file(
-        get_most_recent_file(os.path.join(DATA_DIR, "scrap_summary_*.json"))
-    )
-    # Merge scrap summaries with validation
-    
-
-    updated_scrap_summary = merge_scrap_summaries(scrap_summary_data, previous_scrap_summary)
+    # Step 6: Update scrap summaries
     scrap_summary_file_path = os.path.join(DATA_DIR, f"scrap_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-    save_json_file(updated_scrap_summary, scrap_summary_file_path)
+    save_data_to_file(scrap_summary_data, scrap_summary_file_path)
 
+    # Combine all scrap summaries
+    scrap_summary_files = glob.glob(os.path.join(DATA_DIR, "scrap_summary_*.json"))
     combined_scrap_summary_file = os.path.join(DATA_DIR, "combined_scrap_summary.json")
-    save_json_file(updated_scrap_summary, combined_scrap_summary_file)
+    combine_scrap_summaries(scrap_summary_files, combined_scrap_summary_file)
 
-    # Step 5: Parse PDFs
+    # Step 7: Parse PDFs
     print("Parsing PDF files...")
     parse_pdfs([PAGES_AS_PDF_DIR, CONVERTED_DOWNLOADS_DIR], PARSED_DIR)
 
-    # Step 6: Chunk parsed data
+    # Step 8: Chunk parsed data
     print("Chunking parsed data...")
     chunk_parsed_data(PARSED_DIR, CHUNKED_DIR)
 
-    # Step 7: Embed chunks
+    # Step 9: Embed chunks
     print("Embedding chunked data...")
     embed_chunks(CHUNKED_DIR, EMBEDDING_DIR)
 
-    # Step 8: Create indexes
+    # Step 10: Create indexes
     print("Creating indexes...")
     create_index(EMBEDDING_DIR, INDEX_DIR)
 
-    # Step 9: Map metadata
+    # Step 11: Map metadata
     print("Mapping metadata...")
     try:
         map_metadata()
     except Exception as e:
         print(f"Error during metadata mapping: {e}")
 
-    # Step 10: Ingest data into Neo4j
+    # Step 12: Ingest data into Neo4j
     print("Ingesting data to Neo4j...")
     mapped_metadata_path = os.path.join(DATA_DIR, "mapped_metadata.json")
     if os.path.exists(mapped_metadata_path):

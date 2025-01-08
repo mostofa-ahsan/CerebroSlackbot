@@ -1,30 +1,33 @@
 from neo4j import GraphDatabase
+import json
+import os
 
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "password"
+CHUNKED_DIR = "../data/chunked_text_files"
 
-def create_graph_driver():
-    """Connect to the Neo4j database."""
-    return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-
-def ingest_data_to_neo4j(metadata_file):
-    """Ingest metadata into Neo4j."""
-    driver = create_graph_driver()
-
-    with open(metadata_file, "r") as f:
-        metadata = json.load(f)
-
+def ingest_data_to_neo4j(chunked_dir, uri, user, password):
+    """Ingest chunks into Neo4j."""
+    driver = GraphDatabase.driver(uri, auth=(user, password))
     with driver.session() as session:
-        for entry in metadata:
-            session.run("""
-                MERGE (page:Page {id: $id, link: $link})
-                WITH page
-                UNWIND $child_links AS child_link
-                MERGE (child:Page {link: child_link})
-                MERGE (page)-[:LINKS_TO]->(child)
-                """, id=entry["page_id"], link=entry["page_link"], child_links=entry["child_links"])
-    print("Ingestion to Neo4j completed!")
+        for chunk_file in os.listdir(chunked_dir):
+            if chunk_file.endswith(".json"):
+                chunk_path = os.path.join(chunked_dir, chunk_file)
+                with open(chunk_path, "r") as f:
+                    chunks = json.load(f)
+                for chunk in chunks:
+                    session.run(
+                        """
+                        CREATE (c:Chunk {chunk_id: $chunk_id, text: $text})
+                        WITH c
+                        UNWIND $links AS link
+                        CREATE (l:Link {url: link})
+                        CREATE (c)-[:HAS_LINK]->(l)
+                        """,
+                        chunk_id=chunk["chunk_id"], text=chunk["text"], links=chunk["links"]
+                    )
+    print("Data ingested into Neo4j!")
 
 if __name__ == "__main__":
-    ingest_data_to_neo4j("../data/mapped_metadata.json")
+    ingest_data_to_neo4j(CHUNKED_DIR, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
