@@ -9,7 +9,7 @@ from map_metadata import map_metadata
 from ingest_to_neo4j import ingest_data_to_neo4j
 
 # Configuration
-LIMIT = 3  # Limit on the number of pages to scrape in each run
+LIMIT = 300  # Limit on the number of pages to scrape in each run
 DATA_DIR = "../data"
 PROGRESS_FILE = os.path.join(DATA_DIR, "progress_summary.json")
 PAGES_AS_PDF_DIR = os.path.join(DATA_DIR, "pages_as_pdf")
@@ -29,67 +29,85 @@ os.makedirs(INDEX_DIR, exist_ok=True)
 
 
 def main():
-    print("##############################################")
-    print("Starting the pipeline...")
+    # print("##############################################")
+    # print("Starting the pipeline...")
 
-    BASE_URL = "https://brandcentral.verizonwireless.com"
+    # BASE_URL = "https://brandcentral.verizonwireless.com"
 
-    # Step 1: Load progress summary
-    progress_data = load_progress_file(PROGRESS_FILE)
-    last_page_id = progress_data[-1]["page_id"] if progress_data else 0
+    # # Step 1: Load progress summary
+    # progress_data = load_progress_file(PROGRESS_FILE)
+    # last_page_id = progress_data[-1]["page_id"] if progress_data else 0
 
-    # Step 2: Authenticate using Playwright and start scraping
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as playwright:
-        context, page = login_to_verizon_with_playwright(playwright)
-        if not context or not page:
-            print("Authentication failed. Exiting pipeline.")
-            return
+    # # Step 2: Authenticate using Playwright and start scraping
+    # from playwright.sync_api import sync_playwright
+    # with sync_playwright() as playwright:
+    #     context, page = login_to_verizon_with_playwright(playwright)
+    #     if not context or not page:
+    #         print("Authentication failed. Exiting pipeline.")
+    #         return
 
-        try:
-            # Step 3: Start scraping
-            print(f"Scraping with limit: {LIMIT}")
-            progress_data = scrape_site(
-                page=page,
-                start_url=BASE_URL,
-                base_url=BASE_URL,
-                progress_data=progress_data,
-                limit=LIMIT,
-                last_page_id=last_page_id,
-            )
-        finally:
-            # Ensure context is closed
-            context.close()
+    #     try:
+    #         # Step 3: Start scraping
+    #         print(f"Scraping with limit: {LIMIT}")
+    #         progress_data = scrape_site(
+    #             page=page,
+    #             start_url=BASE_URL,
+    #             base_url=BASE_URL,
+    #             progress_data=progress_data,
+    #             limit=LIMIT,
+    #             last_page_id=last_page_id,
+    #         )
+    #     finally:
+    #         # Ensure context is closed
+    #         context.close()
 
-    # Step 4: Save updated progress summary
-    save_progress_file(progress_data, PROGRESS_FILE)
+    # # Step 4: Save updated progress summary
+    # save_progress_file(progress_data, PROGRESS_FILE)
 
-    # Step 5: Parse PDFs
-    print("Parsing PDF files...")
-    parse_pdfs([PAGES_AS_PDF_DIR], PARSED_DIR)
+    # # Step 5: Parse PDFs
+    # print("Parsing PDF files...")
+    # parse_pdfs([PAGES_AS_PDF_DIR], PARSED_DIR)
 
-    # Step 6: Chunk parsed data
-    print("Chunking parsed data...")
-    chunk_parsed_data(PARSED_DIR, CHUNKED_DIR)
+    # # Step 6: Chunk parsed data
+    # print("Chunking parsed data...")
+    # chunk_parsed_data(PARSED_DIR, CHUNKED_DIR)
 
-    # Step 7: Embed chunks
-    print("Embedding chunked data...")
-    embed_chunks(CHUNKED_DIR, EMBEDDING_DIR)
+    # # Step 7: Embed chunks
+    # print("Embedding chunked data...")
+    # embed_chunks(CHUNKED_DIR, EMBEDDING_DIR)
 
-    # Step 8: Create indexes
-    print("Creating indexes...")
-    create_index(EMBEDDING_DIR, INDEX_DIR)
+    # # Step 8: Create indexes
+    # print("Creating indexes...")
+    # create_index(EMBEDDING_DIR, INDEX_DIR)
 
     # Step 9: Map metadata
     print("Mapping metadata...")
     try:
         mapped_metadata_path = os.path.join(DATA_DIR, "mapped_metadata.json")
+        # progress_file_path= os.path.join(DATA_DIR, "progress_summary.json")
+        # Check if progress file exists
+        if not os.path.exists(PROGRESS_FILE):
+            raise FileNotFoundError(f"Progress file not found: {PROGRESS_FILE}")
+        
+        # Ensure index and embedding directories exist
+        if not os.path.exists(INDEX_DIR) or not os.listdir(INDEX_DIR):
+            raise FileNotFoundError(f"Index directory is empty or not found: {INDEX_DIR}")
+        if not os.path.exists(EMBEDDING_DIR) or not os.listdir(EMBEDDING_DIR):
+            raise FileNotFoundError(f"Embedding directory is empty or not found: {EMBEDDING_DIR}")
+        
+        print("METADATA_PATH: ",mapped_metadata_path)
+        print("PROGRESS_FILE_PATH: ",PROGRESS_FILE)
+        print("INDEX_PATH: ", INDEX_DIR)
+        print("EMBEDDING_PATH: ", EMBEDDING_DIR)
+
         map_metadata(
-            progress_file=PROGRESS_FILE,
+            progress_file=PROGRESS_FILE ,
             mapped_metadata_file=mapped_metadata_path,
             index_dir=INDEX_DIR,
             embedding_dir=EMBEDDING_DIR,
         )
+    except FileNotFoundError as fnfe:
+        print(f"File not found error: {fnfe}")
     except Exception as e:
         print(f"Error during metadata mapping: {e}")
 

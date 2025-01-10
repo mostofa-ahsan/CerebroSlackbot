@@ -1,22 +1,17 @@
 import json
 import os
 
-# Paths for progress summary, mapped metadata, embeddings, and indexes
-PROGRESS_SUMMARY_FILE = "../data/progress_summary.json"
-MAPPED_METADATA_FILE = "../data/mapped_metadata.json"
-INDEX_DIR = "../data/indexes"
-EMBEDDING_DIR = "../data/embeddings"
-
-
 def map_metadata(progress_file, mapped_metadata_file, index_dir, embedding_dir):
     """
     Map metadata from the progress summary JSON for Neo4j.
-    Includes child_pages, download_list, parent_page, embeddings, and indexes.
+    Includes child_pages, download_list, parent_pages, embeddings, and indexes.
     """
+    # Ensure progress file exists
     if not os.path.exists(progress_file):
         print(f"Error: {progress_file} not found.")
         return
 
+    # Load progress data
     with open(progress_file, "r") as f:
         progress_data = json.load(f)
 
@@ -37,55 +32,59 @@ def map_metadata(progress_file, mapped_metadata_file, index_dir, embedding_dir):
             }
         })
 
-        # Add Parent Page Relationship
-        if "parent_page" in entry and entry["parent_page"]:
-            metadata["relationships"].append({
-                "start": entry["parent_page"],
-                "end": entry["page_id"],
-                "type": "CHILD_OF"
-            })
+        # Add Parent Page Relationships
+        for parent_page in entry.get("parent_pages", []):
+            if parent_page:
+                metadata["relationships"].append({
+                    "start": parent_page,
+                    "end": entry["page_id"],
+                    "type": "CHILD_OF"
+                })
 
         # Add Child Page Relationships
         for child_page in entry.get("child_pages", []):
-            metadata["relationships"].append({
-                "start": entry["page_id"],
-                "end": child_page,
-                "type": "LINKS_TO"
-            })
+            if child_page:
+                metadata["relationships"].append({
+                    "start": entry["page_id"],
+                    "end": child_page,
+                    "type": "LINKS_TO"
+                })
 
         # Add Download Nodes and Relationships
         for download in entry.get("download_list", []):
-            file_id = f"file_{os.path.basename(download)}"
-            metadata["nodes"].append({
-                "id": file_id,
-                "label": "File",
-                "properties": {
-                    "path": download
-                }
-            })
-            metadata["relationships"].append({
-                "start": entry["page_id"],
-                "end": file_id,
-                "type": "CONTAINS"
-            })
+            if download:
+                file_id = f"file_{os.path.basename(download)}"
+                metadata["nodes"].append({
+                    "id": file_id,
+                    "label": "File",
+                    "properties": {
+                        "path": download
+                    }
+                })
+                metadata["relationships"].append({
+                    "start": entry["page_id"],
+                    "end": file_id,
+                    "type": "CONTAINS"
+                })
 
         # Add Image Nodes and Relationships
         for image in entry.get("saved_images_list", []):
-            image_id = f"image_{os.path.basename(image)}"
-            metadata["nodes"].append({
-                "id": image_id,
-                "label": "Image",
-                "properties": {
-                    "path": image
-                }
-            })
-            metadata["relationships"].append({
-                "start": entry["page_id"],
-                "end": image_id,
-                "type": "CONTAINS"
-            })
+            if image:  # Skip if the image entry is None
+                image_id = f"image_{os.path.basename(image)}"
+                metadata["nodes"].append({
+                    "id": image_id,
+                    "label": "Image",
+                    "properties": {
+                        "path": image
+                    }
+                })
+                metadata["relationships"].append({
+                    "start": entry["page_id"],
+                    "end": image_id,
+                    "type": "CONTAINS"
+                })
 
-        # Add Index Node and Relationships
+        # Add Index Nodes and Relationships
         index_file = os.path.join(index_dir, f"{entry['page_id']}_index.json")
         if os.path.exists(index_file):
             metadata["nodes"].append({
@@ -101,7 +100,7 @@ def map_metadata(progress_file, mapped_metadata_file, index_dir, embedding_dir):
                 "type": "INDEXED_BY"
             })
 
-        # Add Embedding Node and Relationships
+        # Add Embedding Nodes and Relationships
         embedding_file = os.path.join(embedding_dir, f"{entry['page_id']}_embedding.json")
         if os.path.exists(embedding_file):
             metadata["nodes"].append({
@@ -124,5 +123,11 @@ def map_metadata(progress_file, mapped_metadata_file, index_dir, embedding_dir):
 
 
 if __name__ == "__main__":
-    # Default behavior for standalone execution
-    map_metadata(PROGRESS_SUMMARY_FILE, MAPPED_METADATA_FILE, INDEX_DIR, EMBEDDING_DIR)
+    # Example usage for testing
+    DATA_DIR = "../data"
+    progress_file = os.path.join(DATA_DIR, "progress_summary.json")
+    mapped_metadata_file = os.path.join(DATA_DIR, "mapped_metadata.json")
+    index_dir = os.path.join(DATA_DIR, "indexes")
+    embedding_dir = os.path.join(DATA_DIR, "embeddings")
+
+    map_metadata(progress_file, mapped_metadata_file, index_dir, embedding_dir)
