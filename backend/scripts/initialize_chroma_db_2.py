@@ -1,7 +1,8 @@
 import os
-from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
-from langchain_chroma import Chroma  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document  # Import Document object
 
 # Configuration
 CHROMA_DB_DIR = "../data/cerebro_chroma_db"
@@ -35,19 +36,11 @@ def initialize_chroma_db(documents):
     )
 
     # Initialize ChromaDB vector store
-    vectorstore = Chroma(
-        collection_name="verizon_docs",
+    vectorstore = Chroma.from_documents(
+        documents=documents,
         embedding_function=embedding_model,
         persist_directory=CHROMA_DB_DIR,
     )
-
-    # Chunk the documents before adding
-    print("Chunking documents...")
-    chunked_documents = chunk_documents(documents)
-
-    # Add documents to the vector store and persist
-    print("Adding documents to the vector store...")
-    vectorstore.add_documents(chunked_documents)
     vectorstore.persist()
 
     # Print confirmation message
@@ -58,14 +51,8 @@ def initialize_chroma_db(documents):
 def main():
     # Example documents to add to the database
     documents = [
-        {
-            "page_content": "This is a sample document.",
-            "metadata": {"source": "sample_doc_1.pdf"}
-        },
-        {
-            "page_content": "This is another sample document.",
-            "metadata": {"source": "sample_doc_2.pdf"}
-        },
+        Document(page_content="This is a sample document.", metadata={"source": "sample_doc_1.pdf"}),
+        Document(page_content="This is another sample document.", metadata={"source": "sample_doc_2.pdf"}),
     ]
 
     print("Initializing ChromaDB...")

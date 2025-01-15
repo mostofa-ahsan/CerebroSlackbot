@@ -1,9 +1,10 @@
 import os
 from pathlib import Path
 from PyPDF2 import PdfReader
-from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
-from langchain_chroma import Chroma  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document  # Import Document object
 
 # Configuration
 PDF_FOLDERS = ["../data/converted_downloads", "../data/pages_as_pdf"]
@@ -27,7 +28,7 @@ def extract_text_from_pdf(pdf_path):
 
 def load_pdfs_from_folders(folders):
     """
-    Load all PDFs from the specified folders and format them correctly.
+    Load all PDFs from the specified folders and format them correctly as Document objects.
     """
     documents = []
     for folder in folders:
@@ -36,11 +37,8 @@ def load_pdfs_from_folders(folders):
             print(f"Processing: {pdf_file}")
             content = extract_text_from_pdf(pdf_file)
             if content:
-                # Ensure correct format with 'page_content' and optional 'metadata'
-                documents.append({
-                    "page_content": content,
-                    "metadata": {"source": str(pdf_file)}  # Add metadata if needed
-                })
+                # Create Document objects
+                documents.append(Document(page_content=content, metadata={"source": str(pdf_file)}))
     return documents
 
 
@@ -70,12 +68,11 @@ def initialize_chroma_vectorstore(documents):
     )
 
     # Initialize Chroma vector store
-    vectorstore = Chroma(
-        collection_name="verizon_docs",
+    vectorstore = Chroma.from_documents(
+        documents=documents,
         embedding_function=embedding_model,
         persist_directory=CHROMA_DB_DIR,
     )
-    vectorstore.add_documents(documents)
     vectorstore.persist()
     print(f"Vectorstore created and persisted at {CHROMA_DB_DIR}")
     return vectorstore
