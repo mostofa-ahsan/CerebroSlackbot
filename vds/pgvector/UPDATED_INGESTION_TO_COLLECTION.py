@@ -52,7 +52,61 @@ DB_PORT = 5433
 # Create PostgreSQL connection string for LangChain PGVector
 PG_CONN_STRING = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@127.0.0.1:{DB_PORT}/{DB_NAME}"
 
-# Initialize PGVector
+# Function to connect to PostgreSQL
+def connect_to_db():
+    try:
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host="127.0.0.1",
+            port=DB_PORT
+        )
+        conn.autocommit = True
+        return conn
+    except Exception as e:
+        print(f"❌ Error connecting to database: {e}")
+        exit()
+
+# Function to check if collection exists
+def collection_exists(cursor, collection_name):
+    cursor.execute(f"""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = '{collection_name.lower()}'
+        );
+    """)
+    return cursor.fetchone()[0]
+
+# Function to create collection if it does not exist
+def create_collection():
+    conn = connect_to_db()
+    cursor = conn.cursor()
+
+    if collection_exists(cursor, COLLECTION_NAME):
+        print(f"✅ Collection '{COLLECTION_NAME}' already exists. Skipping creation.")
+    else:
+        try:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")  # Ensure pgvector is enabled
+            cursor.execute(f"""
+                CREATE TABLE {COLLECTION_NAME} (
+                    id SERIAL PRIMARY KEY,
+                    file_name TEXT,
+                    chunk_id TEXT,
+                    content TEXT,
+                    tokens INTEGER,
+                    embedding vector({VECTOR_DIM})
+                );
+            """)
+            print(f"✅ Collection '{COLLECTION_NAME}' created successfully.")
+        except Exception as e:
+            print(f"❌ Error creating collection: {e}")
+    
+    cursor.close()
+    conn.close()
+
+# Initialize PGVector after creating collection
+create_collection()
 vector_store = PGVector(embeddings=embedding_model, collection_name=COLLECTION_NAME, connection=PG_CONN_STRING)
 
 # Function to extract text from PDF
