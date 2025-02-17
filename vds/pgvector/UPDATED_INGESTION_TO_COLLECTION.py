@@ -5,9 +5,11 @@ import fitz  # PyMuPDF for PDF processing
 import pandas as pd
 from sshtunnel import SSHTunnelForwarder
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
+from psycopg2.extras import execute_values
 from langchain_postgres.vectorstores import PGVector
 from langchain_core.documents import Document
+from langchain.embeddings.base import Embeddings
+from sentence_transformers import SentenceTransformer
 
 # Load environment variables
 dotenv_path = os.path.abspath("../../../.env")
@@ -32,9 +34,25 @@ PDF_FOLDERS = ["../../data/converted_downloads_2", "../../data/pages_as_pdf_2"]
 CHUNK_SIZE = 2000  
 CHUNK_OVERLAP = 200  
 
-# Load embedding model
+# Define PG connection string
+PG_CONN_STRING = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+# ✅ Custom Wrapper for LangChain-Compatible SentenceTransformer
+class LangChainSentenceTransformer(Embeddings):
+    def __init__(self, model_name):
+        self.model = SentenceTransformer(model_name)
+
+    def embed_documents(self, texts):
+        """Embed multiple documents (for inserting data)."""
+        return self.model.encode(texts).tolist()
+
+    def embed_query(self, text):
+        """Embed a single query."""
+        return self.model.encode([text])[0].tolist()
+
+# Initialize the embedding model
 SENTENCE_MODEL_PATH = "../../models/all-mpnet-base-v2"
-embedding_model = SentenceTransformer(SENTENCE_MODEL_PATH)
+embedding_model = LangChainSentenceTransformer(SENTENCE_MODEL_PATH)
 
 # Establish SSH tunnel
 server = SSHTunnelForwarder(
@@ -48,9 +66,6 @@ server.start()
 
 # Update DB_PORT to the tunneled local port
 DB_PORT = 5433
-
-# Create PostgreSQL connection string for LangChain PGVector
-PG_CONN_STRING = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@127.0.0.1:{DB_PORT}/{DB_NAME}"
 
 # Function to connect to PostgreSQL
 def connect_to_db():
@@ -68,26 +83,23 @@ def connect_to_db():
         print(f"❌ Error connecting to database: {e}")
         exit()
 
-# Function to check if collection exists
-def collection_exists(cursor, collection_name):
-    cursor.execute(f"""
-        SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_name = '{collection_name.lower()}'
-        );
-    """)
-    return cursor.fetchone()[0]
-
-# Function to create collection if it does not exist
+# ✅ Function to check and create the collection if it doesn’t exist
 def create_collection():
     conn = connect_to_db()
     cursor = conn.cursor()
 
-    if collection_exists(cursor, COLLECTION_NAME):
-        print(f"✅ Collection '{COLLECTION_NAME}' already exists. Skipping creation.")
-    else:
-        try:
-            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")  # Ensure pgvector is enabled
+    try:
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")  # Ensure pgvector is enabled
+        cursor.execute(f"""
+            SELECT EXISTS (
+                SELECT FROM pg_tables 
+                WHERE schemaname = 'public' 
+                AND tablename = '{COLLECTION_NAME.lower()}'
+            );
+        """)
+        exists = cursor.fetchone()[0]
+
+        if not exists:
             cursor.execute(f"""
                 CREATE TABLE {COLLECTION_NAME} (
                     id SERIAL PRIMARY KEY,
@@ -98,16 +110,14 @@ def create_collection():
                     embedding vector({VECTOR_DIM})
                 );
             """)
-            print(f"✅ Collection '{COLLECTION_NAME}' created successfully.")
-        except Exception as e:
-            print(f"❌ Error creating collection: {e}")
-    
-    cursor.close()
-    conn.close()
-
-# Initialize PGVector after creating collection
-create_collection()
-vector_store = PGVector(embeddings=embedding_model, collection_name=COLLECTION_NAME, connection=PG_CONN_STRING)
+            print(f"✅ Collection '{COLLECTION_NAME}' created.")
+        else:
+            print(f"✅ Collection '{COLLECTION_NAME}' already exists.")
+    except Exception as e:
+        print(f"❌ Error creating collection: {e}")
+    finally:
+        cursor.close()
+        conn.close()
 
 # Function to extract text from PDF
 def extract_text_from_pdf(pdf_path):
@@ -126,23 +136,28 @@ def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
     for i in range(0, len(words), chunk_size - overlap):
         yield " ".join(words[i:i + chunk_size])
 
-# Function to generate embeddings using LangChain
-def generate_embedding(text):
-    return embedding_model.encode(text).tolist()
-
-# Function to insert data into the PGVector collection
-def insert_data(file_name, chunk_id, content):
+# ✅ Function to insert data into PGVector collection
+def insert_data(vector_store, file_name, chunk_id, content):
     try:
-        embedding = generate_embedding(content)
-        doc = Document(page_content=content, metadata={"file_name": file_name, "chunk_id": chunk_id})
-        vector_store.add_documents([doc])
+        document = Document(page_content=content, metadata={"file_name": file_name, "chunk_id": chunk_id})
+        vector_store.add_documents([document])
         print(f"✅ Data inserted for chunk {chunk_id} of {file_name}")
     except Exception as e:
         print(f"❌ Error inserting data for chunk {chunk_id} of {file_name}: {e}")
 
-# Main ingestion function
+# ✅ Main ingestion function using LangChain's PGVector
 def ingest_to_pgvector():
     print("### 🚀 Starting Data Ingestion for PGVector ###")
+
+    # Ensure the collection exists
+    create_collection()
+
+    # Initialize PGVector for storing embeddings
+    vector_store = PGVector(
+        embeddings=embedding_model,
+        collection_name=COLLECTION_NAME,
+        connection=PG_CONN_STRING
+    )
 
     # Process PDF files
     for folder in PDF_FOLDERS:
@@ -160,10 +175,10 @@ def ingest_to_pgvector():
                 # Chunk the text
                 chunks = list(chunk_text(text))
 
-                # Insert each chunk into the collection
+                # Insert each chunk into PGVector
                 for i, chunk in enumerate(chunks):
                     chunk_id = f"{file_name}_{i}"
-                    insert_data(file_name, chunk_id, chunk)
+                    insert_data(vector_store, file_name, chunk_id, chunk)
 
     print("### ✅ Data Ingestion Completed ###")
 
